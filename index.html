@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Bubble Battle</title>
+    <meta name="description" content="Геолокационная командная игра-сражение за пузыри на реальной местности">
+
+    <!-- Манифест PWA -->
+    <link rel="manifest" href="manifest.json">
+
+    <!-- Цвет темы в адресной строке / статус-баре -->
+    <meta name="theme-color" content="#1e3c72">
+
+    <!-- Установка на Android как приложение -->
+    <meta name="mobile-web-app-capable" content="yes">
+
+    <!-- Установка на iOS ("Добавить на экран Домой") -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Bubble Battle">
+    <link rel="apple-touch-icon" href="apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+    <!-- Регистрируем service worker (нужен для установки приложения) -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('sw.js')
+                  .then(() => console.log('Воркер зарегистрирован'))
+                  .catch((err) => console.error('Ошибка воркера:', err));
+            });
+        }
+    </script>
+    
+    <style>
+/* ... дальше идут твои обычные стили ... */
+        :root {
+            --bg-void: #070b14;
+            --bg-deep: #0c1626;
+            --bg-deep-2: #10203a;
+            --panel: rgba(255, 255, 255, 0.055);
+            --panel-strong: rgba(255, 255, 255, 0.09);
+            --panel-border: rgba(255, 255, 255, 0.12);
+            --cyan: #00e5ff;
+            --magenta: #ff2e93;
+            --gold: #ffd23f;
+            --green: #3ddc84;
+            --orange: #ff9f45;
+            --red: #ff4d5e;
+            --text-primary: #eaf1ff;
+            --text-muted: #8ea0c4;
+            --radius-s: 10px;
+            --radius-m: 16px;
+            --radius-l: 24px;
+            --font-display: 'Rubik', sans-serif;
+            --font-body: 'Inter', sans-serif;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0; padding: 0; overflow: hidden;
+            font-family: var(--font-body);
+            background: var(--bg-void);
+            color: var(--text-primary);
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        #map { width: 100vw; height: 100vh; display: none; background: var(--bg-void); }
+
+        .screen {
+            height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center;
+            position: relative; overflow: hidden; color: var(--text-primary);
+            background:
+                radial-gradient(circle at 50% 42%, rgba(0,229,255,0.10) 0%, transparent 55%),
+                radial-gradient(circle at 50% 42%, rgba(255,46,147,0.08) 0%, transparent 70%),
+                linear-gradient(160deg, var(--bg-void) 0%, var(--bg-deep) 55%, var(--bg-void) 100%);
+        }
+        .screen::before {
+            content: ''; position: absolute; inset: 0; pointer-events: none;
+            background-image:
+                repeating-linear-gradient(0deg, rgba(0,229,255,0.035) 0px, transparent 1px, transparent 38px),
+                repeating-linear-gradient(90deg, rgba(0,229,255,0.035) 0px, transparent 1px, transparent 38px);
+        }
+        .screen::after {
+            content: ''; position: absolute; top: 50%; left: 50%; width: 640px; height: 640px;
+            border: 1px solid rgba(0,229,255,0.18); border-radius: 50%;
+            transform: translate(-50%, -50%); pointer-events: none;
+            animation: radarPulse 4s ease-out infinite;
+        }
+        @keyframes radarPulse {
+            0% { width: 60px; height: 60px; opacity: 0.9; border-color: rgba(0,229,255,0.5); }
+            100% { width: 640px; height: 640px; opacity: 0; border-color: rgba(0,229,255,0); }
+        }
+
+        .box {
+            position: relative; z-index: 2;
+            background: var(--panel);
+            border: 1px solid var(--panel-border);
+            padding: 28px 24px; border-radius: var(--radius-l); text-align: center;
+            backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+            width: 88%; max-width: 360px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.06);
+        }
+        .box h2 {
+            font-family: var(--font-display); font-weight: 900; font-size: 26px; letter-spacing: 0.5px;
+            margin: 0 0 18px 0; text-transform: uppercase;
+            background: linear-gradient(90deg, var(--cyan), var(--magenta));
+            -webkit-background-clip: text; background-clip: text; color: transparent;
+        }
+
+        input, button, select {
+            margin: 7px 0; padding: 13px 14px; border-radius: var(--radius-s); border: 1px solid transparent;
+            width: 100%; box-sizing: border-box; font-size: 15px; font-family: var(--font-body);
+        }
+        input[type="text"], input[type="file"] {
+            background: rgba(255,255,255,0.06); color: var(--text-primary); border: 1px solid var(--panel-border);
+        }
+        input[type="text"]::placeholder { color: var(--text-muted); }
+        input[type="text"]:focus, select:focus { outline: none; border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(0,229,255,0.2); }
+
+        button {
+            background: linear-gradient(135deg, var(--magenta), #d81b78);
+            color: white; font-weight: 700; font-family: var(--font-display);
+            letter-spacing: 0.3px; cursor: pointer; border: none;
+            transition: transform 0.12s ease, box-shadow 0.2s ease, filter 0.2s ease;
+            box-shadow: 0 6px 18px rgba(255,46,147,0.35);
+        }
+        button:hover { filter: brightness(1.08); }
+        button:active { transform: scale(0.96); }
+        button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+
+        .colors { display: flex; justify-content: center; gap: 10px; margin: 14px 0; flex-wrap: wrap; }
+        .color-btn { width: 38px; height: 38px; border-radius: 50%; border: 3px solid transparent; cursor: pointer; transition: all 0.2s; flex-shrink: 0; }
+        .color-btn.active { border-color: white; transform: scale(1.18); box-shadow: 0 0 14px rgba(255,255,255,0.85); }
+
+        #lobby-screen { display: none; }
+        .player-item {
+            background: rgba(255,255,255,0.05); border: 1px solid var(--panel-border);
+            padding: 10px 12px; border-radius: var(--radius-s); margin: 6px 0;
+            display: flex; align-items: center; gap: 10px; font-size: 14px;
+        }
+        .player-color-dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid white; flex-shrink: 0; box-shadow: 0 0 8px currentColor; }
+
+        .cond-block {
+            background: rgba(255,255,255,0.04); border: 1px solid var(--panel-border);
+            border-radius: var(--radius-m); padding: 14px; margin: 10px 0; text-align: left;
+            transition: border-color 0.2s ease, background 0.2s ease;
+        }
+        .cond-block:has(input:checked) { border-color: rgba(0,229,255,0.4); background: rgba(0,229,255,0.06); }
+        .cond-block label { display: flex; align-items: center; gap: 9px; font-size: 14px; font-weight: 600; cursor: pointer; margin: 0; color: var(--text-primary); }
+        .cond-block input[type="checkbox"] { width: auto; margin: 0; accent-color: var(--cyan); transform: scale(1.25); }
+        .cond-block input[type="range"] { margin: 12px 0 4px 0; accent-color: var(--magenta); height: 4px; }
+        .cond-value-display { text-align: center; font-size: 13px; color: var(--text-muted); font-weight: 600; }
+
+        @keyframes pulseRed { 0% { box-shadow: 0 0 5px 2px var(--red); } 50% { box-shadow: 0 0 22px 8px var(--red); } 100% { box-shadow: 0 0 5px 2px var(--red); } }
+        @keyframes pulseYellow { 0% { box-shadow: 0 0 5px 2px var(--gold); } 50% { box-shadow: 0 0 16px 5px var(--orange); } 100% { box-shadow: 0 0 5px 2px var(--gold); } }
+        @keyframes blinkCheckpoint { 0% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(1.18); } 100% { opacity: 1; transform: scale(1); } }
+        @keyframes timerWarning { 0% { color: var(--red); transform: scale(1); } 50% { color: var(--gold); transform: scale(1.1); } 100% { color: var(--red); transform: scale(1); } }
+
+        .bubble-marker-icon { transition: transform 0.2s linear; }
+        .bubble-attack { animation: pulseRed 1s infinite; border-color: var(--red) !important; }
+        .bubble-cooldown { animation: pulseYellow 2s infinite; border-color: var(--orange) !important; }
+        .bubble-dead { filter: grayscale(100%); opacity: 0.4; border-color: #333 !important; }
+        .in-checkpoint { animation: blinkCheckpoint 0.8s infinite !important; border-color: var(--gold) !important; }
+        .dead-overlay { position: absolute; font-size: 24px; z-index: 10; text-shadow: 0 0 5px black; }
+
+        #ui-container {
+            display: none; position: absolute; top: calc(12px + env(safe-area-inset-top)); right: calc(12px + env(safe-area-inset-right)); z-index: 1000;
+            background: rgba(12, 22, 38, 0.88); border: 1px solid var(--panel-border);
+            padding: 12px 10px; border-radius: var(--radius-m); box-shadow: 0 8px 28px rgba(0,0,0,0.45);
+            backdrop-filter: blur(14px); width: min(168px, calc(100vw - 24px)); text-align: center;
+            max-width: calc(100vw - 24px);
+        }
+        .stats-text { margin: 5px 0; font-weight: 600; font-size: 13px; color: var(--text-muted); }
+        .stats-text span { font-family: var(--font-display); }
+        #btn-shop, #btn-team-manage { display: none; margin-top: 6px; box-shadow: none; }
+        #btn-shop { background: linear-gradient(135deg, var(--gold), #e0a800); color: #1a1200; }
+        #btn-team-manage { background: linear-gradient(135deg, #b34ce0, #7c1fb5); }
+        #btn-kill { background: linear-gradient(135deg, var(--red), #a3121f); }
+
+        #btn-inventory {
+            position: absolute; bottom: calc(22px + env(safe-area-inset-bottom)); right: calc(22px + env(safe-area-inset-right)); z-index: 1000;
+            background: linear-gradient(135deg, var(--cyan), #0077a3); color: #04202b;
+            width: 60px; height: 60px; border-radius: 50%; font-size: 24px; display: none;
+            box-shadow: 0 6px 20px rgba(0,229,255,0.4); padding: 0;
+        }
+
+        #btn-center-player {
+            position: absolute; top: calc(12px + env(safe-area-inset-top)); left: calc(12px + env(safe-area-inset-left)); z-index: 1001;
+            width: 46px; height: 46px; border-radius: 14px; display: none; padding: 0; font-size: 22px;
+            background: linear-gradient(135deg, rgba(0,229,255,0.85), rgba(0,90,140,0.9)); color: #021822;
+            box-shadow: 0 8px 28px rgba(0,0,0,0.35);
+        }
+
+        #buffs-panel { position: absolute; top: calc(68px + env(safe-area-inset-top)); left: calc(12px + env(safe-area-inset-left)); z-index: 1000; display: flex; flex-direction: column; gap: 6px; }
+        .buff-icon {
+            background: rgba(12, 22, 38, 0.9); color: var(--text-primary); border: 1px solid var(--panel-border);
+            padding: 6px 12px; border-radius: 999px; font-size: 12px; font-weight: 700; display: none;
+            backdrop-filter: blur(6px); font-family: var(--font-display);
+        }
+
+        .modal {
+            display: none; opacity: 0; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -60%);
+            width: 90%; max-width: 380px;
+            background: linear-gradient(180deg, var(--bg-deep-2), var(--bg-deep));
+            border: 1px solid var(--panel-border);
+            color: var(--text-primary);
+            z-index: 2000; border-radius: var(--radius-l); padding: 24px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+            max-height: 80vh; overflow-y: auto; box-sizing: border-box;
+            transition: all 0.3s cubic-bezier(.2,.9,.3,1.2); text-align: center;
+        }
+        .modal.show { display: block; opacity: 1; transform: translate(-50%, -50%); }
+        .modal h2 { font-family: var(--font-display); text-transform: uppercase; letter-spacing: 0.5px; font-size: 20px; }
+        .modal-overlay {
+            display: none; opacity: 0; position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(3, 6, 12, 0.72); z-index: 1999; backdrop-filter: blur(4px); transition: opacity 0.3s ease;
+        }
+        .modal-overlay.show { display: block; opacity: 1; }
+        .close-btn { background: rgba(255,255,255,0.08); color: var(--text-muted); box-shadow: none; margin-top: 16px; border: 1px solid var(--panel-border); }
+
+        .shop-item, .inv-item {
+            background: rgba(255,255,255,0.04); border: 1px solid var(--panel-border);
+            padding: 12px 14px; border-radius: var(--radius-s); margin-bottom: 10px;
+            display: flex; justify-content: space-between; align-items: center; text-align: left;
+        }
+        .shop-item b, .inv-item b { color: var(--text-primary); font-family: var(--font-display); font-size: 14px; }
+        .shop-item small { color: var(--text-muted); }
+        .shop-item button, .inv-item button { width: auto; padding: 7px 14px; margin: 0; font-size: 13px; box-shadow: none; }
+        .admin-stop-btn { background: linear-gradient(135deg, var(--red), #8a0f1c); margin-top: 16px; font-weight: 700; }
+
+        .time-picker-box { margin: 15px 0; text-align: left; }
+        .timer-warning { animation: timerWarning 1s infinite; font-weight: bold; }
+        #invite-toast {
+            display: none; position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+            background: linear-gradient(135deg, var(--orange), #d97300); color: #201200;
+            padding: 11px 22px; border-radius: 999px; z-index: 3000; font-weight: 700; font-family: var(--font-display);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.4); width: 85%; max-width: 340px; text-align: center;
+        }
+
+        .finale-overlay {
+            display: none; opacity: 0; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            z-index: 5000; align-items: center; justify-content: center; flex-direction: column;
+            text-align: center; color: var(--text-primary); transition: opacity 0.4s ease;
+            background:
+                radial-gradient(circle at 50% 40%, rgba(255,46,147,0.14) 0%, transparent 60%),
+                linear-gradient(160deg, var(--bg-void), var(--bg-deep-2));
+        }
+        .finale-overlay.show { display: flex; opacity: 1; }
+
+        @keyframes flashBg {
+            0%, 100% { box-shadow: inset 0 0 120px rgba(255,46,147,0.15); }
+            50% { box-shadow: inset 0 0 220px rgba(255,46,147,0.4); }
+        }
+        #finale-call-overlay { animation: flashBg 1.2s infinite; }
+        #finale-call-title {
+            font-family: var(--font-display); font-weight: 900; font-size: 36px; margin: 0 0 12px 0;
+            letter-spacing: 1px; text-transform: uppercase;
+            background: linear-gradient(90deg, var(--magenta), var(--gold));
+            -webkit-background-clip: text; background-clip: text; color: transparent;
+            text-shadow: 0 0 40px rgba(255,46,147,0.4);
+        }
+        #finale-call-message { font-size: 16px; color: var(--text-muted); max-width: 320px; margin: 0 auto 25px auto; }
+        #finale-waiting-status { font-size: 14px; color: var(--text-muted); animation: pulseText 1.5s infinite; }
+        @keyframes pulseText { 0%,100% { opacity: 0.5; } 50% { opacity: 1; } }
+
+        #finale-countdown-block { display: none; }
+        .countdown-number {
+            font-family: var(--font-display); font-size: 96px; font-weight: 900; color: var(--gold);
+            text-shadow: 0 0 40px rgba(255,210,63,0.9);
+            animation: countdownPop 1s ease;
+        }
+        @keyframes countdownPop { 0% { transform: scale(1.6); opacity: 0; } 60% { transform: scale(1); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+
+        #leaderboard-content { width: 92%; max-width: 430px; max-height: 90vh; overflow-y: auto; padding-bottom: 24px; }
+        #leaderboard-title {
+            font-family: var(--font-display); font-weight: 900; text-transform: uppercase;
+            font-size: 26px; margin-bottom: 18px; letter-spacing: 0.5px;
+            text-shadow: 0 0 20px rgba(255,255,255,0.3);
+        }
+
+        .leaderboard-row {
+            display: flex; align-items: center; gap: 12px;
+            background: var(--panel); border: 1px solid var(--panel-border);
+            border-radius: var(--radius-m); padding: 11px 15px; margin-bottom: 10px; backdrop-filter: blur(8px);
+        }
+        .lb-place { font-family: var(--font-display); font-size: 20px; font-weight: 800; width: 34px; text-align: center; color: var(--text-muted); }
+        .lb-avatars-group { display: flex; gap: 4px; }
+        .lb-avatar { width: 44px; height: 44px; border-radius: 50%; border: 3px solid white; overflow: hidden; background: #2a3552; flex-shrink: 0; }
+        .lb-avatar img { width: 100%; height: 100%; object-fit: cover; }
+        .lb-avatar-placeholder { width: 100%; height: 100%; background: #3a4666; }
+        .lb-name { flex: 1; text-align: left; font-weight: 700; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .lb-po { font-family: var(--font-display); font-weight: 700; color: #dcb6ff; background: rgba(179,76,224,0.18); padding: 5px 12px; border-radius: 999px; font-size: 13px; }
+
+        @keyframes lbPopIn {
+            0% { transform: scale(0.2) translateY(30px); opacity: 0; }
+            60% { transform: scale(1.08) translateY(-4px); opacity: 1; }
+            100% { transform: scale(1) translateY(0); opacity: 1; }
+        }
+        .lb-pop-in { animation: lbPopIn 0.5s cubic-bezier(.34,1.56,.64,1); }
+
+        .winner-row { background: rgba(255,210,63,0.12); border-color: rgba(255,210,63,0.3); }
+        .winner-final {
+            background: linear-gradient(135deg, rgba(255,210,63,0.3), rgba(255,46,147,0.18));
+            box-shadow: 0 0 30px rgba(255,210,63,0.6);
+            transform: scale(1.05);
+            animation: winnerGlow 1.2s infinite;
+        }
+        @keyframes winnerGlow {
+            0%,100% { box-shadow: 0 0 20px rgba(255,210,63,0.5); }
+            50% { box-shadow: 0 0 45px rgba(255,210,63,1); }
+        }
+        .winner-final .lb-avatar { border-color: var(--gold); box-shadow: 0 0 16px var(--gold); }
+        .winner-final .lb-po { color: #2a1c00; background: var(--gold); }
+
+        #finale-menu-btn {
+            display: none; background: linear-gradient(135deg, var(--green), #1f9d5c);
+            max-width: 280px; margin: 18px auto 0 auto; font-size: 16px; padding: 15px;
+            box-shadow: 0 8px 24px rgba(61,220,132,0.35);
+        }
+
+        #zone-warning-overlay {
+            display: none; opacity: 0; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            z-index: 4500; align-items: center; justify-content: center; flex-direction: column;
+            text-align: center; color: var(--text-primary); transition: opacity 0.3s ease;
+            background: radial-gradient(circle at 50% 40%, rgba(255,77,94,0.22) 0%, rgba(7,11,20,0.96) 65%);
+            animation: zoneFlash 1s infinite;
+        }
+        #zone-warning-overlay.show { display: flex; opacity: 1; }
+        @keyframes zoneFlash {
+            0%, 100% { background-color: rgba(255,77,94,0.05); }
+            50% { background-color: rgba(255,77,94,0.22); }
+        }
+        #zone-warning-title {
+            font-family: var(--font-display); font-weight: 900; font-size: 30px; text-transform: uppercase;
+            color: var(--red); text-shadow: 0 0 30px rgba(255,77,94,0.8); margin: 0 0 8px 0; letter-spacing: 0.5px;
+        }
+        #zone-warning-sub { font-size: 15px; color: var(--text-muted); max-width: 300px; margin: 0 auto 20px auto; }
+        .zone-countdown-number {
+            font-family: var(--font-display); font-size: 84px; font-weight: 900; color: var(--red);
+            text-shadow: 0 0 40px rgba(255,77,94,0.9);
+        }
+        #zone-warning-overlay .zone-label { font-size: 12px; letter-spacing: 2px; text-transform: uppercase; color: var(--text-muted); margin-top: 4px; }
+
+        #zone-death-toast {
+            display: flex; opacity: 0; pointer-events: none; position: fixed; top: 18px; left: 50%;
+            transform: translate(-50%, -20px); z-index: 4600; transition: all 0.35s ease;
+            background: linear-gradient(135deg, var(--red), #8a0f1c); color: white;
+            padding: 14px 22px; border-radius: var(--radius-m); font-weight: 700; font-family: var(--font-display);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5); width: 88%; max-width: 360px; text-align: center;
+            align-items: center; justify-content: center; gap: 8px; font-size: 14px;
+        }
+        #zone-death-toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+        /* ===== Баннер критических предупреждений (геолокация/HTTPS) ===== */
+        #geo-warning-banner {
+            display: none; position: fixed; top: 0; left: 0; width: 100vw; z-index: 6000;
+            background: linear-gradient(90deg, var(--red), #b3121f); color: white;
+            padding: 12px 16px; font-size: 13px; font-weight: 600; text-align: center;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.4); line-height: 1.4;
+        }
+        #geo-warning-banner.show { display: block; }
+
+        /* ===== Кнопка/подсказка установки приложения ===== */
+        #install-app-btn {
+            display: none; width: 100%; margin-top: 10px; background: linear-gradient(90deg, var(--cyan), var(--magenta));
+            color: #06121f; font-weight: 700; border: none; border-radius: var(--radius-s, 10px);
+            padding: 11px; font-size: 14px; cursor: pointer;
+        }
+        #install-app-btn.show { display: block; }
+        #ios-install-hint {
+            display: none; margin-top: 10px; font-size: 12px; line-height: 1.5; color: var(--text-muted, #8ea0c4);
+            background: rgba(255,255,255,0.06); border-radius: var(--radius-s, 10px); padding: 10px;
+        }
+        #ios-install-hint.show { display: block; }
+
+        /* ===== Начальный экран (стартовое меню) ===== */
+        #start-screen { flex-direction: row; gap: 16px; padding: 22px; align-items: stretch; }
+        .start-banner {
+            flex: 1.5; min-height: 78vh; border: none; border-radius: var(--radius-l, 18px);
+            background: linear-gradient(160deg, var(--magenta, #ff2e93) 0%, var(--bg-deep, #10203f) 65%, var(--cyan, #00e5ff) 130%);
+            color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center;
+            gap: 14px; cursor: pointer; position: relative; overflow: hidden; padding: 20px;
+            box-shadow: 0 0 40px rgba(255,46,147,0.25);
+            transition: transform 0.15s ease;
+        }
+        .start-banner:active { transform: scale(0.98); }
+        .start-banner-title {
+            font-size: 30px; font-weight: 900; line-height: 1.15; text-align: center; letter-spacing: 1px;
+            text-shadow: 0 2px 12px rgba(0,0,0,0.35);
+        }
+        .start-banner-sub { font-size: 13px; opacity: 0.9; background: rgba(0,0,0,0.25); padding: 5px 14px; border-radius: 20px; }
+        .start-banner-play {
+            font-size: 13px; font-weight: 700; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.4);
+            padding: 8px 20px; border-radius: 30px; margin-top: 6px;
+        }
+        .start-side-col { flex: 1; display: flex; flex-direction: column; gap: 16px; }
+        .start-side-btn {
+            flex: 1; border: none; border-radius: var(--radius-l, 18px); cursor: pointer;
+            display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+            background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1);
+            color: var(--text-primary, #fff); font-size: 14px; font-weight: 700;
+            transition: transform 0.15s ease, background 0.15s ease;
+        }
+        .start-side-btn:active { transform: scale(0.97); }
+        .start-side-btn:not(.soon):hover { background: rgba(0,229,255,0.12); }
+        .start-side-btn .start-side-icon { font-size: 30px; }
+        .start-side-btn.soon { opacity: 0.55; cursor: default; }
+        .start-account-pill {
+            position: absolute; top: 16px; right: 16px; font-size: 12px; background: rgba(0,0,0,0.35);
+            padding: 6px 12px; border-radius: 20px; color: #fff; z-index: 2;
+        }
+
+        /* ===== Экран регистрации / входа ===== */
+        .back-btn {
+            background: none; border: none; color: var(--text-muted, #8ea0c4); font-size: 13px;
+            cursor: pointer; padding: 0; margin-bottom: 12px; text-align: left; width: auto;
+        }
+        #auth-error { display: none; }
+        #auth-error.show { display: block; }
+
+        /* ===== Экран лиги ===== */
+        .league-row {
+            display: flex; align-items: center; gap: 10px; padding: 10px 8px; border-radius: 10px;
+            font-size: 13px; border-bottom: 1px solid rgba(255,255,255,0.06);
+        }
+        .league-row.me { background: rgba(0,229,255,0.08); }
+        .league-rank { width: 26px; text-align: center; font-weight: 700; opacity: 0.7; }
+        .league-name { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .league-rating { font-weight: 700; }
+        .division-badge {
+            font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 20px; white-space: nowrap;
+        }
+        .division-bronze   { background: rgba(180,120,70,0.25); color: #cd8a52; }
+        .division-silver   { background: rgba(190,190,200,0.2); color: #c7cbd1; }
+        .division-gold     { background: rgba(255,215,80,0.2); color: #ffd450; }
+        .division-platinum { background: rgba(120,230,220,0.2); color: #78e6dc; }
+        .division-diamond  { background: rgba(140,150,255,0.25); color: #9aa5ff; }
+
+        /* ===== Титул чемпиона ===== */
+        .start-account-pill.is-champion {
+            background: linear-gradient(90deg, rgba(255,215,80,0.35), rgba(0,0,0,0.35));
+            border: 1px solid rgba(255,215,80,0.6);
+        }
+        #league-throne {
+            display: none; align-items: center; gap: 12px; margin-bottom: 16px; padding: 12px 14px;
+            border-radius: 14px; background: linear-gradient(135deg, rgba(255,215,80,0.18), rgba(255,215,80,0.04));
+            border: 1px solid rgba(255,215,80,0.35);
+        }
+        .league-throne-crown { font-size: 30px; }
+        .league-throne-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #ffd450; font-weight: 700; }
+        .league-throne-name { font-size: 15px; font-weight: 700; }
+        .league-throne-rating { font-size: 12px; font-weight: 400; opacity: 0.7; }
+
+        .champion-announcement {
+            position: fixed; top: 14px; left: 50%; transform: translate(-50%, -30px);
+            background: linear-gradient(90deg, #ffd450, #ff8a00); color: #1a1200; font-weight: 700; font-size: 13px;
+            padding: 12px 20px; border-radius: 30px; z-index: 5000; opacity: 0; transition: all 0.4s ease;
+            box-shadow: 0 10px 30px rgba(255,150,0,0.4); text-align: center; max-width: 90vw;
+        }
+        .champion-announcement.show { opacity: 1; transform: translate(-50%, 0); }
+
+        /* ===== Иконка-подсказка (?) для справки по механикам ===== */
+        .info-icon-btn {
+            width: 26px; height: 26px; min-width: 26px; border-radius: 50%; border: 1px solid var(--panel-border, rgba(255,255,255,0.15));
+            background: rgba(255,255,255,0.06); color: var(--text-primary, #fff); font-size: 13px; cursor: pointer;
+            display: inline-flex; align-items: center; justify-content: center; padding: 0; margin-left: 8px; vertical-align: middle;
+        }
+        #btn-help-start {
+            position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%);
+            background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); color: #fff;
+            font-size: 12px; padding: 8px 16px; border-radius: 20px; cursor: pointer; z-index: 2;
+        }
+        #info-modal { text-align: left; }
+        #info-modal h2 { text-align: center; }
+        .info-nav { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; justify-content: center; }
+        .info-nav-btn {
+            font-size: 11px; padding: 6px 10px; border-radius: 14px; background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.12); color: var(--text-muted, #8ea0c4); cursor: pointer;
+        }
+        .info-section { margin-bottom: 20px; scroll-margin-top: 10px; }
+        .info-section h3 { font-size: 15px; margin: 0 0 6px; color: var(--cyan, #00e5ff); }
+        .info-section p, .info-section li { font-size: 13px; line-height: 1.55; color: var(--text-primary, #fff); opacity: 0.92; margin: 0 0 6px; }
+        .info-section ul { margin: 0; padding-left: 18px; }
+        .info-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px; }
+        .info-table th, .info-table td { border-bottom: 1px solid rgba(255,255,255,0.08); padding: 6px 4px; text-align: left; }
+        .info-table th { color: var(--text-muted, #8ea0c4); font-weight: 600; }
+    </style>
+</head>
+<body>
+    <div id="geo-warning-banner"></div>
+
+    <!-- ==================== СТАРТОВЫЙ ЭКРАН ==================== -->
+    <div id="start-screen" class="screen">
+        <div id="start-account-pill" class="start-account-pill" style="display:none;"></div>
+
+        <button id="btn-mode-bubble" class="start-banner" onclick="onBubbleBattleClick()">
+            <div class="start-banner-title">BUBBLE<br>BATTLE</div>
+            <div class="start-banner-sub">Основной режим</div>
+            <div class="start-banner-play">▶ Играть</div>
+        </button>
+
+        <div class="start-side-col">
+            <button id="btn-tab-league" class="start-side-btn" onclick="openLeagueScreen()">
+                <span class="start-side-icon">🏆</span>
+                <span>Лига</span>
+            </button>
+            <button id="btn-tab-soon" class="start-side-btn soon" onclick="return false;">
+                <span class="start-side-icon">🔒</span>
+                <span>Скоро</span>
+            </button>
+        </div>
+
+        <button id="btn-help-start" onclick="openInfoModal('info-basics')">ℹ️ Как играть и правила лиги</button>
+    </div>
+
+    <!-- ==================== ЭКРАН ВХОДА / РЕГИСТРАЦИИ ==================== -->
+    <div id="auth-screen" class="screen" style="display:none;">
+        <div class="box">
+            <button class="back-btn" onclick="backToStart()">← Назад</button>
+            <h2 id="auth-title">Вход в аккаунт</h2>
+            <p id="auth-error"></p>
+            <input type="text" id="auth-username" placeholder="Ник" maxlength="16" autocomplete="username">
+            <input type="password" id="auth-password" placeholder="Пароль" maxlength="32" autocomplete="current-password">
+            <button onclick="submitAuth()">Войти</button>
+            <p style="font-size: 12px; margin-top: 12px; text-align: center; color: var(--text-muted, #8ea0c4);">
+                Нет аккаунта? <a href="#" id="auth-toggle-link" onclick="toggleAuthMode(); return false;">Зарегистрироваться</a>
+            </p>
+        </div>
+    </div>
+
+    <!-- ==================== ЭКРАН ЛИГИ / РЕЙТИНГА ==================== -->
+    <div id="league-screen" class="screen" style="display:none;">
+        <div class="box" style="max-width: 420px; width: 92%;">
+            <button class="back-btn" onclick="backToStart()">← Назад</button>
+            <h2>🏆 Лига <button class="info-icon-btn" onclick="openInfoModal('info-league')">?</button></h2>
+            <div id="league-my-stats" style="text-align:center; margin-bottom:12px; font-size:13px; color: var(--text-muted,#8ea0c4);"></div>
+            <div id="league-throne"></div>
+            <div id="league-list" style="max-height: 52vh; overflow-y: auto;"></div>
+        </div>
+    </div>
+
+    <div id="login-screen" class="screen" style="display:none;">
+        <div class="box">
+            <button class="back-btn" onclick="backToStart()">← Назад</button>
+            <h2>Bubble Battle</h2>
+            <p id="stop-notice" style="display:none; color: #ffeb3b; font-size: 13px; background: rgba(244,67,54,0.4); padding: 8px; border-radius: 6px; margin-bottom: 10px;"></p>
+            <input type="text" id="username" placeholder="Ваше имя" maxlength="12" required>
+            <div class="colors" id="color-picker"></div>
+            <label style="font-size: 12px; display:block; margin-top:10px;">Аватарка:</label>
+            <input type="file" id="userphoto" accept="image/*">
+            <button onclick="joinLobby()">Войти в лобби</button>
+            <button id="install-app-btn" onclick="installApp()">📲 Установить как приложение</button>
+            <p id="ios-install-hint">📲 Чтобы установить: нажмите «Поделиться» внизу экрана Safari → «На экран «Домой»».</p>
+        </div>
+    </div>
+
+    <div id="lobby-screen" class="screen">
+        <div class="box">
+            <h2>Лобби ожидания</h2>
+            <div id="players-list" style="margin-bottom: 15px; max-height: 180px; overflow-y: auto;"></div>
+
+            <div id="admin-settings" style="display: none;">
+                <p style="font-size: 13px; opacity: 0.85; margin-bottom: 4px;">Условия завершения матча</p>
+                <p style="font-size: 11px; opacity: 0.6; margin-top: 0;">Игра завершится по первому сработавшему условию</p>
+
+                <div class="cond-block">
+                    <label><input type="checkbox" id="cond-time-toggle" checked> ⏱️ Лимит времени</label>
+                    <input type="range" id="cond-time-value" min="10" max="180" step="5" value="20">
+                    <div class="cond-value-display" id="cond-time-display">20 мин.</div>
+                </div>
+
+                <div class="cond-block">
+                    <label><input type="checkbox" id="cond-po-toggle"> 🏆 Лимит очков (ПО)</label>
+                    <input type="range" id="cond-po-value" min="20" max="300" step="10" value="100">
+                    <div class="cond-value-display" id="cond-po-display">100 ПО</div>
+                </div>
+
+                <div class="cond-block">
+                    <label><input type="checkbox" id="cond-royale-toggle"> ☠️ Королевская битва (Last Man Standing)</label>
+                </div>
+
+                <button id="btn-start" onclick="adminStartGame()" style="background: #4caf50; margin-top: 10px;">Начать игру</button>
+            </div>
+
+            <p id="wait-text" style="font-size: 14px; opacity: 0.8;">Ожидание запуска хостом...</p>
+        </div>
+    </div>
+
+    <button id="btn-center-player" onclick="centerOnPlayer()" aria-label="Вернуться к игроку">📍</button>
+
+    <div id="buffs-panel">
+        <div id="buff-scan" class="buff-icon">📡 Сканер: <span class="time"></span></div>
+        <div id="buff-dash" class="buff-icon" style="color: #4caf50;">🛡️ Рывок: <span class="time"></span></div>
+        <div id="buff-smoke" class="buff-icon" style="color: #9e9e9e;">💨 Дым: <span class="time"></span></div>
+        <div id="buff-magnet" class="buff-icon" style="color: #2196f3;">🧲 Магнит: <span class="time"></span></div>
+        <div id="buff-jammed" class="buff-icon" style="color: #f44336; background: rgba(0,0,0,0.9);">🚫 РАДАР ЗАГЛУШЕН: <span class="time"></span></div>
+    </div>
+
+    <div id="invite-toast">Вам предлагают союз! Зайдите в чекпоинт.</div>
+
+    <div id="ui-container">
+        <div class="stats-text" id="timer-row" style="color: #00bcd4; font-size: 14px;">⏱️ <span id="match-timer">00:00:00</span></div>
+        <div class="stats-text" id="po-container">ПО: <span id="val-po" style="color: #9c27b0; font-size: 20px;">0</span></div>
+        <div class="stats-text">Монеты: <span id="val-coins" style="color: #fbc02d; font-size: 20px; text-shadow: 0 0 2px black;">0</span></div>
+        <div class="stats-text" style="font-size: 12px; color: gray;">Множитель: x<span id="val-mult">1</span></div>
+        <hr style="border: 0; border-top: 1px solid #ccc; margin: 8px 0;">
+        <div id="status-text" style="color: #4caf50; font-size: 13px; margin-bottom: 5px;">Щит активен!</div>
+        <button id="btn-kill" onclick="activateKillMode()" style="background: #f44336; color: white; margin: 0; display: none;">Режим убийцы</button>
+        <button id="btn-shop" onclick="openShop()">🛒 Магазин</button>
+        <button id="btn-team-manage" onclick="openTeamManage()">🤝 Союз</button>
+    </div>
+
+    <button id="btn-inventory" onclick="openInventory()">🎒</button>
+
+    <div id="modal-overlay" class="modal-overlay" onclick="closeModals()"></div>
+    
+    <div id="shop-modal" class="modal">
+        <h2 style="margin-top: 0;">Магазин <button class="info-icon-btn" onclick="openInfoModal('info-economy')">?</button></h2>
+        <div id="shop-convert-box" style="display: none; background: #e1bee7; padding: 10px; border-radius: 8px; margin-bottom: 15px;">
+            <b>Обмен очков</b><br>3 Монеты = 1 ПО<br>
+            <button onclick="buyItem('convert')" style="background: #9c27b0; margin-top: 10px;">Обменять</button>
+        </div>
+        <div id="shop-items-list"></div>
+        <button class="close-btn" onclick="closeModals()">Закрыть</button>
+    </div>
+
+    <div id="inventory-modal" class="modal">
+        <h2 style="margin-top: 0;">Рюкзак</h2>
+        <div id="inventory-items-list">Пусто...</div>
+        <div id="admin-controls" style="display: none;">
+            <hr style="margin: 15px 0;">
+            <button class="admin-stop-btn" onclick="confirmStopGame()">🛑 ЗАВЕРШИТЬ ИГРУ (АДМИН)</button>
+        </div>
+        <button class="close-btn" onclick="closeModals()">Закрыть</button>
+    </div>
+
+    <div id="team-modal" class="modal">
+        <h2 style="margin-top: 0;">Управление союзом <button class="info-icon-btn" onclick="openInfoModal('info-alliances')">?</button></h2>
+        <div id="team-invite-actions" style="display: none;">
+            <p id="team-invite-text">Игрок предлагает союз!</p>
+            <button onclick="acceptInvite()" style="background: #4caf50;">Принять</button>
+            <button onclick="declineInvite()" style="background: #f44336;">Отклонить</button>
+        </div>
+        <div id="team-leave-actions" style="display: none;">
+            <p>Вы в союзе. Общие ПО: <span id="team-po-display">0</span></p>
+            <button onclick="leaveTeam()" style="background: #f44336;">Разорвать союз (5 монет)</button>
+        </div>
+        <button class="close-btn" onclick="closeModals()">Закрыть</button>
+    </div>
+
+    <!-- ==================== СПРАВКА ПО МЕХАНИКАМ ==================== -->
+    <div id="info-modal" class="modal" style="max-width: 480px;">
+        <h2 style="margin-top: 0;">ℹ️ Справка</h2>
+
+        <div class="info-nav">
+            <button class="info-nav-btn" onclick="scrollInfoTo('info-basics')">Основы</button>
+            <button class="info-nav-btn" onclick="scrollInfoTo('info-economy')">Экономика</button>
+            <button class="info-nav-btn" onclick="scrollInfoTo('info-zone')">Зона</button>
+            <button class="info-nav-btn" onclick="scrollInfoTo('info-combat')">Бой</button>
+            <button class="info-nav-btn" onclick="scrollInfoTo('info-alliances')">Союзы</button>
+            <button class="info-nav-btn" onclick="scrollInfoTo('info-league')">Лига</button>
+            <button class="info-nav-btn" onclick="scrollInfoTo('info-champion')">Титул</button>
+        </div>
+
+        <div id="info-scroll-area" style="max-height: 56vh; overflow-y: auto; padding-right: 4px;">
+            <div class="info-section" id="info-basics">
+                <h3>🎮 Основы игры</h3>
+                <p>Bubble Battle — командная геолокационная игра на реальной местности. Ваше местоположение
+                отслеживается через GPS телефона и в реальном времени видно на карте у остальных игроков.</p>
+                <p>По карте разбросаны пузыри (bubbles) — подходите к ним вплотную, чтобы лопнуть и получить
+                монеты. Монеты нужны для покупок в магазине, а Победные Очки (ПО) определяют ваше место в конце матча.</p>
+            </div>
+
+            <div class="info-section" id="info-economy">
+                <h3>💰 Экономика: монеты, ПО и магазин</h3>
+                <ul>
+                    <li><b>Монеты</b> — собираются из пузырей, тратятся в магазине на чекпоинте.</li>
+                    <li><b>ПО (Победные Очки)</b> — определяют итоговое место в матче. Обменять монеты на ПО можно
+                    прямо на Главном чекпоинте (курс обмена указан в магазине).</li>
+                    <li><b>Пассивные бонусы</b> (множители добычи) — покупаются один раз и действуют до конца матча,
+                    увеличивая количество монет с каждого лопнутого пузыря.</li>
+                    <li><b>Расходники</b> (скан, рывок, дымовая завеса, магнит, джаммер, ловушка) — попадают в
+                    рюкзак и используются по одному, эффект одноразовый.</li>
+                    <li>Все точные цены и эффекты предметов смотрите прямо в открытом магазине.</li>
+                </ul>
+            </div>
+
+            <div class="info-section" id="info-zone">
+                <h3>📍 Игровая зона и чекпоинты</h3>
+                <p>Матч проходит внутри круглой игровой зоны вокруг центральной точки. Если вы выходите за
+                границу зоны, начинается предупреждение с обратным отсчётом — успейте вернуться, иначе погибнете
+                и потеряете половину своих очков (или половину общих очков союза, если вы в команде).</p>
+                <p><b>Чекпоинты</b> — безопасные зоны на карте. Главный чекпоинт нужен для магазина, союзов и
+                подведения итогов матча в конце. Есть также случайно расположенные боковые чекпоинты.</p>
+            </div>
+
+            <div class="info-section" id="info-combat">
+                <h3>⚔️ Бой</h3>
+                <p>Активируйте режим атаки на ограниченное время, чтобы получить возможность "убить" другого
+                игрока рядом с собой на карте. После использования режим атаки уходит на перезарядку.</p>
+                <ul>
+                    <li>Убийство ворует половину монет цели.</li>
+                    <li>Нельзя атаковать союзников по команде или игроков на чекпоинте.</li>
+                    <li>Щит и рывок временно защищают от убийства.</li>
+                    <li>Каждое убийство также даёт бонус к рейтингу лиги (см. раздел "Лига").</li>
+                </ul>
+            </div>
+
+            <div class="info-section" id="info-alliances">
+                <h3>🤝 Союзы</h3>
+                <p>На чекпоинте можно пригласить другого игрока в союз — очки победы (ПО) объединяются в общий
+                пул на двоих (или троих, если куплено расширение союза). Побеждает или занимает место уже вся
+                команда целиком, с общим ПО.</p>
+                <p><b>Разрыв союза</b> стоит 5 монет и распускает всю команду: общий пул ПО делится поровну между
+                участниками (инициатор разрыва получает ещё и остаток от деления). Учтите: рейтинговая победа
+                команды делится между всеми участниками — соло-игра выгоднее для рейтинга лиги, а агрессивный
+                разрыв союза с последующей победой даёт отдельный бонус к рейтингу.</p>
+            </div>
+
+            <div class="info-section" id="info-league">
+                <h3>🏆 Лига и рейтинг</h3>
+                <p>По итогам каждого матча ваш аккаунт получает или теряет рейтинговые очки (РО). От суммы РО
+                зависит ваш дивизион:</p>
+                <table class="info-table">
+                    <tr><th>Дивизион</th><th>РО</th><th>Плата за вход</th></tr>
+                    <tr><td>🥉 Бронза</td><td>0–99</td><td>Бесплатно, защита от потери РО</td></tr>
+                    <tr><td>🥈 Серебро</td><td>100–299</td><td>5 РО</td></tr>
+                    <tr><td>🥇 Золото</td><td>300–599</td><td>10 РО</td></tr>
+                    <tr><td>💎 Платина</td><td>600–999</td><td>15 РО</td></tr>
+                    <tr><td>👑 Алмаз</td><td>1000+</td><td>20 РО</td></tr>
+                </table>
+                <p style="margin-top:8px;">Начиная с Серебра, плата за вход списывается сразу при старте матча —
+                чтобы остаться в плюсе, нужно сыграть активно и занять высокое место.</p>
+                <p><b>Формула:</b> ΔРО = (очки за место − плата за вход) + (убийства × бонус за убийство).
+                Бонус за убийство растёт с дивизионом — в Алмазе и Платине убийства ценятся дороже.</p>
+                <ul>
+                    <li>Топ-10% мест — +50 РО</li>
+                    <li>Топ-30% мест — +30 РО</li>
+                    <li>Топ-60% мест — +10 РО</li>
+                    <li>Остальные места — −20 РО (кроме Бронзы — она защищена)</li>
+                </ul>
+                <p>Победа союза делится между его участниками — соло-победа выгоднее для рейтинга.</p>
+            </div>
+
+            <div class="info-section" id="info-champion">
+                <h3>👑 Титул «Чемпион»</h3>
+                <p>Титул Чемпиона — один на весь сервер, выше всех дивизионов. Получить его может только игрок
+                дивизиона Алмаз с наивысшим рейтингом.</p>
+                <ul>
+                    <li>Если трон свободен (никто ещё не Чемпион) — его получает лучший алмазный игрок.</li>
+                    <li>Если трон занят, сместить действующего Чемпиона может только претендент, чей рейтинг
+                    стал <b>строго выше</b> рейтинга Чемпиона.</li>
+                    <li>Если действующий Чемпион теряет достаточно РО и выпадает из Алмаза — трон освобождается,
+                    и его сразу забирает новый лучший алмазный игрок.</li>
+                </ul>
+                <p>Титул отображается короной 👑 рядом с именем на старте, в лиге и в итогах матча.</p>
+            </div>
+        </div>
+
+        <button class="close-btn" onclick="closeModals()">Закрыть</button>
+    </div>
+
+    <div id="zone-warning-overlay">
+        <h1 id="zone-warning-title">Вы вне зоны!</h1>
+        <p id="zone-warning-sub">Немедленно вернитесь в игровую зону, иначе погибнете и потеряете половину очков.</p>
+        <div class="zone-countdown-number" id="zone-countdown-number">90</div>
+        <div class="zone-label">секунд до гибели</div>
+    </div>
+
+    <div id="zone-death-toast">☠️ Вы погибли за пределами зоны и потеряли половину очков. Идите на Главный чекпоинт, чтобы возродиться.</div>
+
+    <div id="finale-call-overlay" class="finale-overlay">
+        <h1 id="finale-call-title">ВРЕМЯ ВЫШЛО!</h1>
+        <p id="finale-call-message">Срочно вернитесь на Главный чекпоинт для подведения итогов!</p>
+        <div id="finale-waiting-status">Ожидание игроков на Главной базе...</div>
+        <div id="finale-countdown-block">
+            <div class="countdown-number" id="countdown-number">10</div>
+        </div>
+    </div>
+
+    <div id="finale-leaderboard-overlay" class="finale-overlay">
+        <div id="leaderboard-content">
+            <h1 id="leaderboard-title">Итоги матча</h1>
+            <div id="leaderboard-list"></div>
+            <button id="finale-menu-btn" onclick="returnToMenu()">В главное меню</button>
+        </div>
+    </div>
+
+    <div id="map"></div>
+    
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="app.js?v=13"></script>
+</body>
+</html>
